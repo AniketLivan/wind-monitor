@@ -6,12 +6,11 @@ from datetime import UTC, date, datetime, time, timedelta
 from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
 
-import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.config import Settings, get_settings
-from app.db import connect
+from app.db import as_dt, connect
 from app.metrics import compute_metrics, histogram
 from app.queries import SeriesRow, select_series_day_ahead, select_series_horizon
 
@@ -94,12 +93,15 @@ class ByHorizonResponse(BaseModel):
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 
-def get_conn(settings: SettingsDep) -> Iterator[psycopg.Connection]:
-    with connect(settings.database_url) as conn:
+def get_conn(settings: SettingsDep) -> Iterator:
+    conn = connect(settings)
+    try:
         yield conn
+    finally:
+        conn.close()
 
 
-ConnDep = Annotated[psycopg.Connection, Depends(get_conn)]
+ConnDep = Annotated[object, Depends(get_conn)]  # sqlite3 or psycopg connection
 
 
 class Window:
@@ -199,9 +201,9 @@ def meta(conn: ConnDep, settings: SettingsDep):
         "scope": {"start_date": settings.delivery_from, "end_date": settings.delivery_to},
         "day_ahead_cutoff": settings.day_ahead_cutoff.strftime("%H:%M"),
         "max_horizon_h": settings.max_horizon_h,
-        "actuals": {"count": row["actual_count"], "first": _utc(row["actual_first"]),
-                    "last": _utc(row["actual_last"])},
-        "forecasts": {"runs": row["runs"], "first_publish": _utc(row["first_publish"]),
-                      "last_publish": _utc(row["last_publish"])},
-        "last_ingest_at": _utc(row["last_ingest_at"]),
+        "actuals": {"count": row["actual_count"], "first": as_dt(row["actual_first"]),
+                    "last": as_dt(row["actual_last"])},
+        "forecasts": {"runs": row["runs"], "first_publish": as_dt(row["first_publish"]),
+                      "last_publish": as_dt(row["last_publish"])},
+        "last_ingest_at": as_dt(row["last_ingest_at"]),
     }

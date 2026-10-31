@@ -18,8 +18,11 @@ def create_app() -> FastAPI:
     @app.get("/api/health")
     def health(settings: Annotated[Settings, Depends(get_settings)]):
         try:
-            with connect(settings.database_url) as conn:
+            conn = connect(settings)
+            try:
                 conn.execute("SELECT 1")
+            finally:
+                conn.close()
         except Exception:
             return JSONResponse({"status": "error", "db": False}, status_code=503)
         return {"status": "ok", "db": True}

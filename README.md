@@ -2,9 +2,9 @@
 
 A web app for a UK energy utility's **day-ahead power buying team**. It shows the latest national wind generation forecast available at the moment a buying decision is made. It also measures how accurate those forecasts have been, so buyers can size how much extra power to buy.
 
-> Status: **v1 built and running locally** in Docker. Deployment, the public repo and the demo video come later (§9).
+> Status: **v1 built**, backed by a committed SQLite snapshot so it deploys to Vercel with no database to seed. The public repo and the demo video come later (§9).
 
-**Quick start:** `docker compose up --build`, then open http://localhost:3000.
+**Quick start:** see §6 (`uvicorn` for the API, `npm run dev` for the dashboard).
 
 ---
 
@@ -91,18 +91,18 @@ Also: **error vs. horizon** (MAE and P90 for h = 0…48) and an **error distribu
 
 ```
 ┌────────────┐   HTTP/JSON   ┌──────────────┐   SQL   ┌────────────┐
-│  frontend  │ ────────────▶ │   backend    │ ──────▶ │  postgres  │
+│  frontend  │ ────────────▶ │   backend    │ ──────▶ │   SQLite   │
 │ React+Vite │               │   FastAPI    │         │            │
 └────────────┘               └──────┬───────┘         └────────────┘
-                                    │ ingest (on start if empty, or on demand)
-                                    ▼
+                                    ▲ built offline by `python -m app.ingest`
+                                    │
                              Elexon BMRS API
 ```
 
-Everything runs in **Docker Compose**: `db` (Postgres 16), `backend` (Python 3.12, FastAPI, Uvicorn) and `frontend` (Vite build served by nginx, which proxies `/api/` to the backend).
+The data is a frozen January 2026 snapshot in one **SQLite file**, `backend/data/wind.db`, committed to the repo. The backend opens it read-only, so nothing needs seeding on deploy. On **Vercel**, the Vite build is served as static files and `/api/*` is routed to a Python function (`api/index.py`) that runs the FastAPI app.
 
-- **Ingest:** fetches both datasets in week-sized chunks with retries, and upserts them so a re-run is safe and adds no duplicates. It runs automatically when the DB is empty, or manually with `docker compose run --rm backend python -m app.ingest`.
-- **Forecast selection** happens in SQL (`DISTINCT ON` / `LATERAL` join over an index on `(start_time, publish_time DESC)`).
+- **Ingest:** fetches both datasets in week-sized chunks with retries, and upserts them so a re-run is safe and adds no duplicates. Run it locally with `python -m app.ingest` and commit the resulting `wind.db`; the deployed app never writes.
+- **Forecast selection** happens in SQL (a `max(publish_time)` subquery per slot, served by the `(publish_time, start_time)` primary key). The 09:20 London cutoff is computed by a Python function registered with SQLite, since SQLite has no time zones.
 - **Metrics** are plain Python functions over the joined rows, kept separate from the DB so they're easy to unit-test.
 
 ### Database schema

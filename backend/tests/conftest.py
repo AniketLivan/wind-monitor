@@ -5,28 +5,45 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
-from app.db import connect, init_schema
+from app.db import connect, init_schema, is_sqlite, to_db
 from app.main import create_app
 
-TEST_DATABASE_URL = os.environ["TEST_DATABASE_URL"]
+# Every DB-backed test runs on SQLite, and on real Postgres too when TEST_DATABASE_URL is set
+# (docker compose sets it).
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+BACKENDS = [
+    "sqlite",
+    pytest.param(
+        "postgres",
+        marks=pytest.mark.skipif(not TEST_DATABASE_URL, reason="TEST_DATABASE_URL not set"),
+    ),
+]
+
+
+@pytest.fixture(params=BACKENDS)
+def db_settings(request, tmp_path):
+    """Settings pointing at a fresh, empty test database of the parametrised kind."""
+    base = get_settings()
+    if request.param == "postgres":
+        return replace(base, database_url=TEST_DATABASE_URL)
+    return replace(base, database_url=None, database_path=tmp_path / "wind_test.db")
 
 
 @pytest.fixture
-def conn():
-    c = connect(TEST_DATABASE_URL)
+def conn(db_settings):
+    c = connect(db_settings, readonly=False)
     init_schema(c)
-    c.execute("TRUNCATE actual_generation, wind_forecast, ingest_log")
-    c.commit()
+    if db_settings.database_url:
+        c.execute("TRUNCATE actual_generation, wind_forecast, ingest_log")
+        c.commit()
     yield c
     c.close()
 
 
 @pytest.fixture
-def client(conn):
+def client(conn, db_settings):
     app = create_app()
-    app.dependency_overrides[get_settings] = lambda: replace(
-        get_settings(), database_url=TEST_DATABASE_URL
-    )
+    app.dependency_overrides[get_settings] = lambda: db_settings
     with TestClient(app) as c:
         yield c
 
@@ -54,13 +71,15 @@ SMALL_FORECASTS = [
 
 
 def seed_small(conn):
-    with conn.cursor() as cur:
-        cur.executemany(
-            "INSERT INTO actual_generation (start_time, generation_mw) VALUES (%s, %s)",
-            list(SMALL_ACTUALS.items()),
-        )
-        cur.executemany(
-            "INSERT INTO wind_forecast (publish_time, start_time, generation_mw) VALUES (%s, %s, %s)",
-            SMALL_FORECASTS,
-        )
+    # SQLite stores UTC text, Postgres real timestamps; the SQL placeholder differs too.
+    t = to_db if is_sqlite(conn) else (lambda dt: dt)
+    ph = "?" if is_sqlite(conn) else "%s"
+    actuals = [(t(ts), v) for ts, v in SMALL_ACTUALS.items()]
+    forecasts = [(t(p), t(ts), v) for p, ts, v in SMALL_FORECASTS]
+    cur = conn.cursor()
+    cur.executemany(f"INSERT INTO actual_generation (start_time, generation_mw) VALUES ({ph}, {ph})", actuals)
+    cur.executemany(
+        f"INSERT INTO wind_forecast (publish_time, start_time, generation_mw) VALUES ({ph}, {ph}, {ph})",
+        forecasts,
+    )
     conn.commit()
