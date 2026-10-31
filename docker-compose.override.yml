@@ -1,0 +1,7 @@
+# Dev-only: mount backend source so code/test changes apply without a rebuild.
+# Loaded automatically by `docker compose`; ignore with `-f docker-compose.yml`.
+services:
+  backend:
+    volumes:
+      - ./backend/app:/srv/app
+      - ./backend/tests:/srv/tests

@@ -1,0 +1,22 @@
+[project]
+name = "wind-monitor-backend"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi==0.115.6",
+  "uvicorn[standard]==0.34.0",
+  "psycopg[binary]==3.2.3",
+  "httpx==0.28.1",
+]
+
+[project.optional-dependencies]
+test = ["pytest==8.3.4"]
+
+[tool.setuptools]
+packages = ["app"]
+
+[tool.setuptools.package-data]
+app = ["schema.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
